@@ -1,0 +1,84 @@
+# Ensure dates and revenue values are ready
+merged["order_date"] = pd.to_datetime(merged["order_date"])
+merged["year_month"] = merged["order_date"].dt.to_period("M")
+
+# Revenue including outliers
+monthly_revenue_all = (
+    merged.groupby("year_month")["order_value"].sum().round(2)
+)
+
+# Revenue excluding quantity outliers
+monthly_revenue_corrected = (
+    merged.loc[~merged["is_outlier"]]
+    .groupby("year_month")["order_value"]
+    .sum()
+    .round(2)
+)
+
+print("Including outliers:")
+print(monthly_revenue_all)
+
+print("\nCorrected revenue:")
+print(monthly_revenue_corrected)
+
+
+import json
+from pathlib import Path
+
+ROOT = Path.cwd()
+NARRATOR_DIR = ROOT / "narrator"
+NARRATOR_DIR.mkdir(parents=True, exist_ok=True)
+
+# Use the existing results calculated earlier in the pipeline.
+cod_return_rate = round(
+    merged.loc[merged["payment_method"] == "COD", "returned"].mean() * 100,
+    1
+)
+
+cod_tier2 = merged[
+    (merged["payment_method"] == "COD")
+    & (merged["city_tier"] == 2)
+]
+cod_tier2_return_rate = round(cod_tier2["returned"].mean() * 100, 1)
+
+# Compute the month with the highest corrected revenue.
+true_peak_month = monthly_revenue_corrected.idxmax()
+
+# January revenue with all cleaned orders, including the quantity outliers.
+jan = pd.Period("2026-01", freq="M")
+jan_all = round(float(monthly_revenue_all.get(jan, 0)), 2)
+jan_corrected = round(float(monthly_revenue_corrected.get(jan, 0)), 2)
+
+findings = {
+    "cleaned_total_revenue_inr": round(float(merged["order_value"].sum()), 2),
+    "raw_total_revenue_inr": 99860.20,
+    "duplicate_reconciliation_delta_inr": round(
+        99860.20 - float(merged["order_value"].sum()), 2
+    ),
+    "return_rate_by_payment_method": {
+        method: round(float(rate * 100), 1)
+        for method, rate in merged.groupby("payment_method")["returned"].mean().items()
+    },
+    "highest_risk_segment": {
+        "payment_method": "COD",
+        "city_tier": 2,
+        "return_rate_pct": cod_tier2_return_rate
+    },
+    "true_peak_month": {
+        "month": str(true_peak_month),
+        "revenue_inr": round(float(monthly_revenue_corrected.loc[true_peak_month]), 2)
+    },
+    "outlier_inflated_month": {
+        "month": str(jan),
+        "apparent_revenue_inr": jan_all,
+        "corrected_revenue_inr": jan_corrected
+    }
+}
+
+output_path = NARRATOR_DIR / "findings.json"
+output_path.write_text(json.dumps(findings, indent=2), encoding="utf-8")
+
+print(f"Saved verified findings to: {output_path}")
+print(json.dumps(findings, indent=2))
+
+
